@@ -1,5 +1,6 @@
 mod adapters;
 mod ai;
+mod cli;
 mod connection;
 mod engine;
 mod error;
@@ -8,7 +9,8 @@ mod mcp;
 mod tui;
 
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Write};
+use std::path::PathBuf;
 
 use clap::Parser;
 use crossterm::event::{
@@ -30,12 +32,22 @@ use crate::ai::AiClient;
 use crate::tui::app;
 
 #[derive(Parser, Debug)]
-    #[command(name = "river", version = "0.10.0", about = "Unified Database Access")]
+    #[command(name = "river", version = "0.11.0", about = "Unified Database Access")]
 struct Cli {
     #[arg(short, long, default_value = "river.yaml")]
     config: String,
     #[arg(long, default_value = "false")]
     server: bool,
+    /// RiverQL script file to run (file-processor mode).
+    #[arg(value_name = "FILE")]
+    file: Option<PathBuf>,
+    /// Run silently: execute the script and print nothing to stdout.
+    #[arg(short, long)]
+    silent: bool,
+    /// Export the final result to a file; the extension picks the format
+    /// (csv, xlsx, json, txt, xml).
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -55,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!(
         config = %cli.config,
-        "River v0.10.0 — starting..."
+        "River v0.11.0 — starting..."
     );
 
     let connections = connection::config::load_config(&cli.config)?;
@@ -100,6 +112,28 @@ async fn main() -> anyhow::Result<()> {
 
     if cli.server {
         return crate::mcp::run_mcp_server(adapters, source_db, ai_configs, ai_client).await;
+    }
+
+    if let Some(file) = cli.file.clone() {
+        let stdout = io::stdout();
+        let mut stdout = stdout.lock();
+        let stderr = io::stderr();
+        let mut stderr = stderr.lock();
+        let code = crate::cli::run_file_processor(
+            file,
+            cli.silent,
+            cli.out.clone(),
+            &adapters,
+            &source_db,
+            &ai_configs,
+            &ai_client,
+            &mut stdout,
+            &mut stderr,
+        )
+        .await;
+        let _ = stdout.flush();
+        let _ = stderr.flush();
+        std::process::exit(code);
     }
 
     let mut app = app::App::new(adapters, source_db, ai_configs, ai_client, conn_errors);
