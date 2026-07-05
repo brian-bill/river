@@ -318,3 +318,56 @@ async fn file_processor_empty_script_exits_zero() {
         "expected 'no statements' hint"
     );
 }
+
+#[tokio::test]
+async fn file_processor_named_params_across_statements() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let (adapters, source_db) = sqlite_ctx(&db_path).await;
+    let rql = dir.path().join("params.rql");
+    std::fs::write(
+        &rql,
+        "\
+create table if not exists items@test (id int primary key, name string not null, status string not null);
+create items@test { id: 1, name: \"Alpha\", status: \"active\" };
+create items@test { id: 2, name: \"Beta\", status: \"inactive\" };
+create items@test { id: 3, name: \"Gamma\", status: \"active\" };
+:filter_status = \"active\";
+find [id, name, status] from items@test where status = :filter_status",
+    )
+    .unwrap();
+
+    let (code, stdout, _stderr) = run(&rql, false, None, &adapters, &source_db).await;
+    assert_eq!(code, 0, "expected success");
+    let out = String::from_utf8(stdout).unwrap();
+    assert!(out.contains("Alpha"), "should contain Alpha: {out}");
+    assert!(out.contains("Gamma"), "should contain Gamma: {out}");
+    assert!(!out.contains("Beta"), "should NOT contain Beta (inactive): {out}");
+}
+
+#[tokio::test]
+async fn file_processor_named_params_multiple_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let (adapters, source_db) = sqlite_ctx(&db_path).await;
+    let rql = dir.path().join("params2.rql");
+    std::fs::write(
+        &rql,
+        "\
+create table if not exists items@test (id int primary key, name string not null, status string not null);
+create items@test { id: 1, name: \"Alpha\", status: \"active\" };
+create items@test { id: 2, name: \"Beta\", status: \"inactive\" };
+create items@test { id: 3, name: \"Gamma\", status: \"active\" };
+:filter_status = \"active\";
+:min_id = 2;
+find [id, name, status] from items@test where status = :filter_status and id >= :min_id",
+    )
+    .unwrap();
+
+    let (code, stdout, _stderr) = run(&rql, false, None, &adapters, &source_db).await;
+    assert_eq!(code, 0, "expected success");
+    let out = String::from_utf8(stdout).unwrap();
+    assert!(!out.contains("Alpha"), "should NOT contain Alpha (id < 2): {out}");
+    assert!(out.contains("Gamma"), "should contain Gamma (active, id>=2): {out}");
+    assert!(!out.contains("Beta"), "should NOT contain Beta (inactive): {out}");
+}

@@ -2,12 +2,12 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::{DatabaseAdapter, QueryResult};
+use crate::adapters::{DatabaseAdapter, QueryResult, Value};
 use crate::ai::AiClient;
 use crate::cli::export;
 use crate::cli::render_table;
 use crate::connection::{AiConfig, DatabaseKind};
-use crate::engine::executor::execute_statement;
+use crate::engine::executor::{execute_statement, expression_to_value, resolve_params_in_statement};
 use crate::lang::ast::Statement;
 use crate::lang::parse_all;
 
@@ -108,9 +108,24 @@ pub async fn run_file_processor(
     // 5. Execute each statement through the shared engine; fail-fast on error.
     let mut last_result: Option<QueryResult> = None;
     let last_index = stmts.len() - 1;
+    let mut params: HashMap<String, Value> = HashMap::new();
     for (i, stmt) in stmts.iter().enumerate() {
         let is_last = i == last_index;
-        match execute_statement(stmt, source_db, adapters, ai_configs, ai_client).await {
+
+        if let Statement::ParamAssign { name, value } = stmt {
+            if let Some(v) = expression_to_value(value) {
+                params.insert(name.clone(), v);
+            }
+            continue;
+        }
+
+        let resolved = if params.is_empty() {
+            stmt.clone()
+        } else {
+            resolve_params_in_statement(stmt, &params)
+        };
+
+        match execute_statement(&resolved, source_db, adapters, ai_configs, ai_client).await {
             Ok(result) => {
                 if is_last && out.is_some() {
                     last_result = Some(result);

@@ -564,6 +564,74 @@ fn param_assign() {
     assert!(parse_one(":start_date = \"2024-01-01\"").is_ok());
 }
 
+#[test]
+fn param_assign_integer() {
+    assert!(parse_one(":limit = 100").is_ok());
+}
+
+#[test]
+fn param_assign_boolean() {
+    assert!(parse_one(":flag = true").is_ok());
+}
+
+#[test]
+fn param_assign_float() {
+    assert!(parse_one(":threshold = 3.14").is_ok());
+}
+
+#[test]
+fn param_assign_null() {
+    assert!(parse_one(":value = null").is_ok());
+}
+
+#[test]
+fn query_with_named_param_in_where() {
+    let result = parse_one("find [name, email] from users where status = :status");
+    assert!(result.is_ok(), "parse error: {:?}", result.err());
+    let stmts = result.unwrap();
+    assert_eq!(stmts.len(), 1);
+    if let Statement::Query(q) = &stmts[0] {
+        assert!(q.filter.is_some());
+        if let Some(Expression::BinaryOp { op, left, right }) = &q.filter {
+            assert_eq!(*op, BinaryOp::Eq);
+            assert!(matches!(left.as_ref(), Expression::Ident(_)));
+            assert!(matches!(right.as_ref(), Expression::NamedParam(_)));
+        } else {
+            panic!("expected BinaryOp filter");
+        }
+    }
+}
+
+#[test]
+fn query_with_named_param_formatted_query() {
+    let result = parse_one(
+        "find [name, email, created_at]\nfrom users@mongo\nwhere status = :status"
+    );
+    assert!(result.is_ok(), "parse error: {:?}", result.err());
+}
+
+#[test]
+fn query_with_multiple_named_params() {
+    let result = parse_one(
+        "find [name, total, created_at] from orders where created_at between :start_date and :end_date"
+    );
+    assert!(result.is_ok(), "parse error: {:?}", result.err());
+}
+
+#[test]
+fn param_assign_in_update() {
+    assert!(parse_one(
+        "update users set status = :new_status where id = :user_id"
+    ).is_ok());
+}
+
+#[test]
+fn param_assign_in_delete() {
+    assert!(parse_one(
+        "remove users where status = :status"
+    ).is_ok());
+}
+
 // ── Schema-qualified tables ──────────────────────────────────────────────────
 
 #[test]
