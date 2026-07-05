@@ -115,7 +115,7 @@ pub async fn run_file_processor(
                 if is_last && out.is_some() {
                     last_result = Some(result);
                 } else if !silent {
-                    let _ = writeln!(stdout, "{}", render_table::render(&result));
+                    let _ = stdout.write_all(render_table::render(&result).as_bytes());
                     let _ = writeln!(stderr, "{}", render_table::summary_line(&result, source_db));
                 }
             }
