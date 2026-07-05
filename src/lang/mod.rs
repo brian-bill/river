@@ -93,3 +93,21 @@ pub fn parse(input: &str) -> Result<ast::Statement, RiverError> {
 
     Ok(stmts.into_iter().next().unwrap_or(ast::Statement::Noop))
 }
+
+/// Parse a RiverQL script into every statement it contains.
+///
+/// Unlike [`parse`], which returns only the first statement, this returns the
+/// full `Vec<Statement>` so that file-processor scripts (`.rql`) can run several
+/// statements separated by `;` in a single invocation. Empty input yields an
+/// empty vector (the caller decides how to handle it).
+pub fn parse_all(input: &str) -> Result<Vec<ast::Statement>, RiverError> {
+    let tokens: Vec<(lexer::Token, Span)> = lexer::lex(input)
+        .into_iter()
+        .map(|s| (s.token, s.span))
+        .collect();
+
+    parser::parser().parse(tokens).map_err(|errors| {
+        let (line, msg) = report_chumsky_errors(input, &errors);
+        RiverError::Parse { line, msg }
+    })
+}

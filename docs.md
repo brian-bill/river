@@ -98,6 +98,76 @@ If `river` is not on your `$PATH`, use the absolute path (e.g. `./target/release
 
 ---
 
+## File Processor
+
+Beyond the interactive TUI and the MCP server, River can run RiverQL scripts
+stored in `.rql` files directly from the command line. This turns River into a
+query runner that fits into shell scripts, cron jobs, and CI pipelines — it
+reuses the exact same engine pipeline (`parser → planner → translator →
+executor`) as the TUI and MCP server, so behavior never diverges.
+
+Pass a `.rql` file as the first positional argument. Mode precedence is
+`--server` > file > TUI: a file argument never starts when `--server` is set,
+and `river` with no file still launches the TUI.
+
+```bash
+# Run a script and print the result as an aligned table to stdout
+river users.rql
+
+# Run silently — exit cleanly, print nothing (for scripts/cron)
+river users.rql -s
+
+# Export the final result to a file; the extension picks the format
+river users.rql --out users.csv
+river users.rql --out users.xlsx
+river users.rql --out users.json
+river users.rql --out users.txt
+river users.rql --out users.xml
+```
+
+A script may contain several statements separated by `;`. Intermediate
+results print to stdout (unless `--silent`); only the **final** statement's
+result is exported when `--out` is set.
+
+```riverql
+# users.rql
+create table if not exists users@pg (id int primary key, name string not null, active bool);
+create users@pg { id: 1, name: "Alice", active: true };
+find [id, name, active] from users@pg order by id
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `FILE` (positional) | RiverQL script file to run (file-processor mode) |
+| `-s`, `--silent` | Execute and print nothing to stdout |
+| `--out FILE` | Export the final result; extension selects the format (`csv`, `xlsx`, `json`, `txt`, `xml`) |
+| `--config FILE` | Path to the connection config (defaults to `river.yaml`) |
+
+### Export Formats
+
+| Extension | Format |
+|-----------|--------|
+| `.csv` | Header row + one row per record; `Null` becomes an empty field |
+| `.xlsx` | Excel workbook with a bold header row and typed body cells |
+| `.json` | `{ "columns": [...], "rows": [{ col: val, ... }], "rows_affected": N, "elapsed_ms": M }` |
+| `.txt` | The same aligned ASCII table that stdout prints |
+| `.xml` | `<results columns="..."><row><col name="...">value</col></row></results>` |
+
+### Exit Codes
+
+File-processor mode uses script-friendly exit codes so it composes in pipelines:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Setup / I/O error (missing file, unsupported export extension, write failure) |
+| `2` | RiverQL parse error |
+| `3` | Execution error (database / adapter failure) |
+
+---
+
 ## Query Basics
 
 ### SELECT — `find`

@@ -5,6 +5,8 @@ pub mod sqlite;
 
 pub mod mongodb;
 
+pub mod value_json;
+
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 

@@ -5,6 +5,7 @@ use rmcp::{ErrorData as McpError, object};
 use serde_json::Value;
 
 use crate::adapters::DatabaseAdapter;
+use crate::adapters::value_json::val_to_json;
 use crate::ai::AiClient;
 use crate::connection::{AiConfig, DatabaseKind};
 use crate::engine::executor::execute_statement;
@@ -317,16 +318,4 @@ pub(crate) fn handle_help(
     Ok(rmcp::model::CallToolResult::success(vec![
         rmcp::model::Content::text(text),
     ]))
-}
-
-fn val_to_json(val: &crate::adapters::Value) -> Value {
-    match val {
-        crate::adapters::Value::Null => Value::Null,
-        crate::adapters::Value::String(s) => Value::String(s.clone()),
-        crate::adapters::Value::Int(n) => Value::Number((*n).into()),
-        crate::adapters::Value::Float(f) => {
-            serde_json::Number::from_f64(*f).map(Value::Number).unwrap_or(Value::Null)
-        }
-        crate::adapters::Value::Bool(b) => Value::Bool(*b),
-    }
 }
