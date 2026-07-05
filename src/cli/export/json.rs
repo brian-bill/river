@@ -25,7 +25,7 @@ impl Exporter for JsonExporter {
             .collect();
 
         let v = json!({
-            "columns": result.columns,
+            "columns": &result.columns,
             "rows": rows,
             "rows_affected": result.rows_affected,
             "elapsed_ms": result.elapsed.as_millis() as u64,
