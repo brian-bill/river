@@ -107,10 +107,13 @@ pub async fn run_file_processor(
 
     // 5. Execute each statement through the shared engine; fail-fast on error.
     let mut last_result: Option<QueryResult> = None;
-    let last_index = stmts.len() - 1;
+    let last_exec_index = stmts
+        .iter()
+        .rposition(|s| !matches!(s, Statement::ParamAssign { .. }))
+        .unwrap_or(usize::MAX);
     let mut params: HashMap<String, Value> = HashMap::new();
     for (i, stmt) in stmts.iter().enumerate() {
-        let is_last = i == last_index;
+        let is_last = i == last_exec_index;
 
         if let Statement::ParamAssign { name, value } = stmt {
             if let Some(v) = expression_to_value(value) {
