@@ -626,7 +626,7 @@ fn named_param_in_update() {
 }
 
 #[test]
-fn param_assign_in_delete() {
+fn named_param_in_delete() {
     assert!(parse_one(
         "remove users where status = :status"
     ).is_ok());
