@@ -460,10 +460,17 @@ async fn execute_query(app: &mut App, input: String) {
     };
 
     if let Statement::ParamAssign { name, value } = &stmt {
-        if let Some(v) = executor::expression_to_value(value) {
-            app.params.insert(name.clone(), v);
+        match executor::expression_to_value(value) {
+            Some(v) => {
+                app.params.insert(name.clone(), v);
+                app.status = Status::Idle;
+            }
+            None => {
+                let msg = format!("parameter '{name}' must be assigned a literal value");
+                app.output.push(OutputLine::Error(msg.clone()));
+                app.status = Status::Error(msg);
+            }
         }
-        app.status = Status::Idle;
         return;
     }
 
