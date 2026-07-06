@@ -33,7 +33,9 @@ fn plan_has_limit(node: &PlanNode) -> bool {
         | PlanNode::Aggregate { input, .. }
         | PlanNode::Distinct { input, .. } => plan_has_limit(input),
         PlanNode::Join { left, right, .. }
-        | PlanNode::Union { left, right, .. } => plan_has_limit(left) || plan_has_limit(right),
+        | PlanNode::Union { left, right, .. }
+        | PlanNode::Intersect { left, right, .. }
+        | PlanNode::Except { left, right, .. } => plan_has_limit(left) || plan_has_limit(right),
         PlanNode::SemiJoinFetch { build, .. } => plan_has_limit(build),
         PlanNode::CreateTableAs { query_plan, .. } => plan_has_limit(query_plan),
         PlanNode::AiProject { input, .. } => plan_has_limit(input),
@@ -427,7 +429,9 @@ fn replace_cte_scans(node: &mut PlanNode, cte_data: &HashMap<String, QueryResult
             replace_cte_scans(input, cte_data);
         }
         PlanNode::Join { left, right, .. }
-        | PlanNode::Union { left, right, .. } => {
+        | PlanNode::Union { left, right, .. }
+        | PlanNode::Intersect { left, right, .. }
+        | PlanNode::Except { left, right, .. } => {
             replace_cte_scans(left, cte_data);
             replace_cte_scans(right, cte_data);
         }
@@ -499,7 +503,9 @@ fn find_single_db(node: &PlanNode) -> Option<(String, DatabaseKind)> {
             let r = find_single_db(right)?;
             if l.0 == r.0 { Some(l) } else { None }
         }
-        PlanNode::Union { left, right, .. } => {
+        PlanNode::Union { left, right, .. }
+        | PlanNode::Intersect { left, right, .. }
+        | PlanNode::Except { left, right, .. } => {
             let l = find_single_db(left)?;
             let r = find_single_db(right)?;
             if l.0 == r.0 { Some(l) } else { None }
@@ -600,7 +606,7 @@ fn collect_single_db_query(node: &PlanNode) -> Option<(String, DatabaseKind, Que
             Some((ldb_name, ldb_kind, q))
         }
         PlanNode::AiProject { .. } => None,
-        PlanNode::Union { .. } | PlanNode::SemiJoinFetch { .. } | PlanNode::InlineData { .. } | PlanNode::Empty | PlanNode::ListTables { .. } | PlanNode::DescribeTable { .. } | PlanNode::Dml { .. } | PlanNode::CreateTable { .. } | PlanNode::CreateTableAs { .. } | PlanNode::AlterTable { .. } | PlanNode::DropTable { .. } | PlanNode::CreateDatabase { .. } | PlanNode::DropDatabase { .. } | PlanNode::ConnectionError { .. } => None,
+        PlanNode::Union { .. } | PlanNode::Intersect { .. } | PlanNode::Except { .. } | PlanNode::SemiJoinFetch { .. } | PlanNode::InlineData { .. } | PlanNode::Empty | PlanNode::ListTables { .. } | PlanNode::DescribeTable { .. } | PlanNode::Dml { .. } | PlanNode::CreateTable { .. } | PlanNode::CreateTableAs { .. } | PlanNode::AlterTable { .. } | PlanNode::DropTable { .. } | PlanNode::CreateDatabase { .. } | PlanNode::DropDatabase { .. } | PlanNode::ConnectionError { .. } => None,
     }
 }
 
@@ -703,6 +709,18 @@ async fn execute_node(
             let rf = Box::pin(execute_node(right, adapters, ai_client, bounded));
             let (lr, rr) = tokio::join!(lf, rf);
             union_results(lr?, rr?, *all)
+        }
+        PlanNode::Intersect { left, right } => {
+            let lf = Box::pin(execute_node(left, adapters, ai_client, bounded));
+            let rf = Box::pin(execute_node(right, adapters, ai_client, bounded));
+            let (lr, rr) = tokio::join!(lf, rf);
+            intersect_results(lr?, rr?)
+        }
+        PlanNode::Except { left, right } => {
+            let lf = Box::pin(execute_node(left, adapters, ai_client, bounded));
+            let rf = Box::pin(execute_node(right, adapters, ai_client, bounded));
+            let (lr, rr) = tokio::join!(lf, rf);
+            except_results(lr?, rr?)
         }
         PlanNode::InlineData { columns, rows } => Ok(QueryResult {
             columns: columns.clone(),
@@ -1805,7 +1823,7 @@ fn apply_distinct(result: &QueryResult) -> Result<QueryResult, RiverError> {
 fn union_results(
     left: QueryResult,
     right: QueryResult,
-    _all: bool,
+    all: bool,
 ) -> Result<QueryResult, RiverError> {
     let columns = if left.columns.len() >= right.columns.len() {
         left.columns.clone()
@@ -1823,10 +1841,100 @@ fn union_results(
         aligned.resize(columns.len(), Value::Null);
         rows.push(aligned);
     }
-    let mut seen = std::collections::HashSet::new();
-    let rows: Vec<Vec<Value>> = rows
+    if !all {
+        let mut seen = std::collections::HashSet::new();
+        let rows: Vec<Vec<Value>> = rows
+            .into_iter()
+            .filter(|row| seen.insert(row.clone()))
+            .collect();
+        Ok(QueryResult {
+            columns,
+            column_sources,
+            rows,
+            elapsed: std::time::Duration::default(),
+            rows_affected: 0,
+        })
+    } else {
+        Ok(QueryResult {
+            columns,
+            column_sources,
+            rows,
+            elapsed: std::time::Duration::default(),
+            rows_affected: 0,
+        })
+    }
+}
+
+fn intersect_results(
+    left: QueryResult,
+    right: QueryResult,
+) -> Result<QueryResult, RiverError> {
+    let columns = if left.columns.len() >= right.columns.len() {
+        left.columns.clone()
+    } else {
+        right.columns.clone()
+    };
+    let column_sources = if left.columns.len() >= right.columns.len() {
+        left.column_sources.clone()
+    } else {
+        right.column_sources.clone()
+    };
+    let right_set: std::collections::HashSet<Vec<Value>> = right
+        .rows
         .into_iter()
-        .filter(|row| seen.insert(row.clone()))
+        .map(|mut row| {
+            row.resize(columns.len(), Value::Null);
+            row
+        })
+        .collect();
+    let rows: Vec<Vec<Value>> = left
+        .rows
+        .into_iter()
+        .filter(|row| {
+            let mut aligned = row.clone();
+            aligned.resize(columns.len(), Value::Null);
+            right_set.contains(aligned.as_slice())
+        })
+        .collect();
+    Ok(QueryResult {
+        columns,
+        column_sources,
+        rows,
+        elapsed: std::time::Duration::default(),
+        rows_affected: 0,
+    })
+}
+
+fn except_results(
+    left: QueryResult,
+    right: QueryResult,
+) -> Result<QueryResult, RiverError> {
+    let columns = if left.columns.len() >= right.columns.len() {
+        left.columns.clone()
+    } else {
+        right.columns.clone()
+    };
+    let column_sources = if left.columns.len() >= right.columns.len() {
+        left.column_sources.clone()
+    } else {
+        right.column_sources.clone()
+    };
+    let right_set: std::collections::HashSet<Vec<Value>> = right
+        .rows
+        .into_iter()
+        .map(|mut row| {
+            row.resize(columns.len(), Value::Null);
+            row
+        })
+        .collect();
+    let rows: Vec<Vec<Value>> = left
+        .rows
+        .into_iter()
+        .filter(|row| {
+            let mut aligned = row.clone();
+            aligned.resize(columns.len(), Value::Null);
+            !right_set.contains(aligned.as_slice())
+        })
         .collect();
     Ok(QueryResult {
         columns,
@@ -3367,5 +3475,195 @@ order by ut.revenue desc"#;
         let stmt = Statement::Query(query.clone());
         let resolved = super::resolve_params_in_statement(&stmt, &params);
         assert_eq!(resolved, stmt);
+    }
+
+    // ── union_results ──────────────────────────────────────────────────
+
+    #[test]
+    fn union_deduplicates_duplicates() {
+        let left = mk_result(
+            vec!["name", "email"],
+            vec![
+                vec![Value::String("Alice".into()), Value::String("a@x.com".into())],
+                vec![Value::String("Bob".into()), Value::String("b@x.com".into())],
+            ],
+        );
+        let right = mk_result(
+            vec!["name", "email"],
+            vec![
+                vec![Value::String("Bob".into()), Value::String("b@x.com".into())],
+                vec![Value::String("Carol".into()), Value::String("c@x.com".into())],
+            ],
+        );
+        let result = super::union_results(left, right, false).unwrap();
+        assert_eq!(result.columns, vec!["name", "email"]);
+        assert_eq!(result.rows.len(), 3);
+    }
+
+    #[test]
+    fn union_all_preserves_duplicates() {
+        let left = mk_result(
+            vec!["name", "email"],
+            vec![
+                vec![Value::String("Alice".into()), Value::String("a@x.com".into())],
+                vec![Value::String("Bob".into()), Value::String("b@x.com".into())],
+            ],
+        );
+        let right = mk_result(
+            vec!["name", "email"],
+            vec![
+                vec![Value::String("Bob".into()), Value::String("b@x.com".into())],
+                vec![Value::String("Carol".into()), Value::String("c@x.com".into())],
+            ],
+        );
+        let result = super::union_results(left, right, true).unwrap();
+        assert_eq!(result.columns, vec!["name", "email"]);
+        assert_eq!(result.rows.len(), 4);
+    }
+
+    #[test]
+    fn union_empty_left() {
+        let left = mk_result(vec!["name", "email"], vec![]);
+        let right = mk_result(
+            vec!["name", "email"],
+            vec![
+                vec![Value::String("Alice".into()), Value::String("a@x.com".into())],
+            ],
+        );
+        let result = super::union_results(left, right, false).unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn union_empty_right() {
+        let left = mk_result(
+            vec!["name", "email"],
+            vec![
+                vec![Value::String("Alice".into()), Value::String("a@x.com".into())],
+            ],
+        );
+        let right = mk_result(vec!["name", "email"], vec![]);
+        let result = super::union_results(left, right, false).unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn union_both_empty() {
+        let left = mk_result(vec!["name", "email"], vec![]);
+        let right = mk_result(vec!["name", "email"], vec![]);
+        let result = super::union_results(left, right, false).unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn union_mismatched_column_counts_uses_wider() {
+        let left = mk_result(
+            vec!["a"],
+            vec![vec![Value::String("x".into())]],
+        );
+        let right = mk_result(
+            vec!["a", "b"],
+            vec![vec![Value::String("y".into()), Value::Int(1)]],
+        );
+        let result = super::union_results(left, right, false).unwrap();
+        assert_eq!(result.columns.len(), 2);
+        assert_eq!(result.columns, vec!["a", "b"]);
+    }
+
+    // ── intersect_results ──────────────────────────────────────────────
+
+    #[test]
+    fn intersect_common_rows() {
+        let left = mk_result(
+            vec!["name"],
+            vec![
+                vec![Value::String("Alice".into())],
+                vec![Value::String("Bob".into())],
+            ],
+        );
+        let right = mk_result(
+            vec!["name"],
+            vec![
+                vec![Value::String("Bob".into())],
+                vec![Value::String("Carol".into())],
+            ],
+        );
+        let result = super::intersect_results(left, right).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Bob".into()));
+    }
+
+    #[test]
+    fn intersect_no_common_rows() {
+        let left = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Alice".into())]],
+        );
+        let right = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Bob".into())]],
+        );
+        let result = super::intersect_results(left, right).unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    #[test]
+    fn intersect_empty_left() {
+        let left = mk_result(vec!["name"], vec![]);
+        let right = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Alice".into())]],
+        );
+        let result = super::intersect_results(left, right).unwrap();
+        assert_eq!(result.rows.len(), 0);
+    }
+
+    // ── except_results ─────────────────────────────────────────────────
+
+    #[test]
+    fn except_removes_right_rows() {
+        let left = mk_result(
+            vec!["name"],
+            vec![
+                vec![Value::String("Alice".into())],
+                vec![Value::String("Bob".into())],
+            ],
+        );
+        let right = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Bob".into())]],
+        );
+        let result = super::except_results(left, right).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Alice".into()));
+    }
+
+    #[test]
+    fn except_no_overlap() {
+        let left = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Alice".into())]],
+        );
+        let right = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Bob".into())]],
+        );
+        let result = super::except_results(left, right).unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Alice".into()));
+    }
+
+    #[test]
+    fn except_all_removed() {
+        let left = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Alice".into())]],
+        );
+        let right = mk_result(
+            vec!["name"],
+            vec![vec![Value::String("Alice".into())]],
+        );
+        let result = super::except_results(left, right).unwrap();
+        assert_eq!(result.rows.len(), 0);
     }
 }
