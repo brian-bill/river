@@ -283,6 +283,20 @@ pub fn resolve_params_in_statement(
                 body: Box::new(resolve_params_in_statement(w.body.as_ref(), params)),
             })
         }
+        Statement::SetOp(s) => Statement::SetOp(SetOp {
+            kind: s.kind.clone(),
+            left: Box::new(resolve_params_in_query(s.left.as_ref(), params)),
+            right: Box::new(resolve_params_in_query(s.right.as_ref(), params)),
+        }),
+        Statement::Explain(inner) => Statement::Explain(Box::new(resolve_params_in_statement(
+            inner.as_ref(),
+            params,
+        ))),
+        Statement::CreateTableAs(ctas) => {
+            let mut c = ctas.clone();
+            c.query = Box::new(resolve_params_in_query(ctas.query.as_ref(), params));
+            Statement::CreateTableAs(c)
+        }
         other => other.clone(),
     }
 }
