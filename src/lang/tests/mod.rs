@@ -619,7 +619,7 @@ fn query_with_multiple_named_params() {
 }
 
 #[test]
-fn param_assign_in_update() {
+fn named_param_in_update() {
     assert!(parse_one(
         "update users set status = :new_status where id = :user_id"
     ).is_ok());
