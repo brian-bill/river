@@ -286,6 +286,7 @@ fn resolve_params_in_query(query: &Query, params: &HashMap<String, Value>) -> Qu
         .collect();
 
     q
+}
 
 pub fn resolve_params_in_statement(
     stmt: &Statement,
