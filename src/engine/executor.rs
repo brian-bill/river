@@ -227,8 +227,65 @@ fn resolve_params_in_query(query: &Query, params: &HashMap<String, Value>) -> Qu
             nulls: o.nulls.clone(),
         })
         .collect();
+
+    q.window_defs = q
+        .window_defs
+        .iter()
+        .map(|d| WindowDef {
+            name: d.name.clone(),
+            spec: WindowSpec {
+                partition_by: d
+                    .spec
+                    .partition_by
+                    .iter()
+                    .map(|e| resolve_params(e, params))
+                    .collect(),
+                order_by: d
+                    .spec
+                    .order_by
+                    .iter()
+                    .map(|o| OrderBy {
+                        expr: resolve_params(&o.expr, params),
+                        direction: o.direction.clone(),
+                        nulls: o.nulls.clone(),
+                    })
+                    .collect(),
+            },
+        })
+        .collect();
+
+    q.sources = q
+        .sources
+        .iter()
+        .map(|s| {
+            let mut s2 = s.clone();
+            s2.kind = match &s.kind {
+                SourceKind::Subquery(subq) => {
+                    SourceKind::Subquery(Box::new(resolve_params_in_query(subq, params)))
+                }
+                other => other.clone(),
+            };
+            s2
+        })
+        .collect();
+
+    q.joins = q
+        .joins
+        .iter()
+        .map(|j| {
+            let mut j2 = j.clone();
+            j2.condition = j2.condition.as_ref().map(|c| resolve_params(c, params));
+            j2.source.kind = match &j.source.kind {
+                SourceKind::Subquery(subq) => {
+                    SourceKind::Subquery(Box::new(resolve_params_in_query(subq, params)))
+                }
+                other => other.clone(),
+            };
+            j2
+        })
+        .collect();
+
     q
-}
 
 pub fn resolve_params_in_statement(
     stmt: &Statement,
