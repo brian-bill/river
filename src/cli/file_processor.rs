@@ -116,8 +116,19 @@ pub async fn run_file_processor(
         let is_last = i == last_exec_index;
 
         if let Statement::ParamAssign { name, value } = stmt {
-            if let Some(v) = expression_to_value(value) {
-                params.insert(name.clone(), v);
+            match expression_to_value(value) {
+                Some(v) => {
+                    params.insert(name.clone(), v);
+                }
+                None => {
+                    let _ = writeln!(
+                        stderr,
+                        "statement {}: parameter '{}' must be assigned a literal value",
+                        i + 1,
+                        name
+                    );
+                    return ExitCode::ExecutionError.as_i32();
+                }
             }
             continue;
         }
