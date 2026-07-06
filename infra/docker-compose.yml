@@ -28,7 +28,8 @@ services:
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 3s
-      retries: 10
+      retries: 40
+      start_period: 60s
 
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest

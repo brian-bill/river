@@ -32,7 +32,7 @@ use crate::ai::AiClient;
 use crate::tui::app;
 
 #[derive(Parser, Debug)]
-    #[command(name = "river", version = "0.11.0", about = "Unified Database Access")]
+    #[command(name = "river", version = "0.11.1", about = "Unified Database Access")]
 struct Cli {
     #[arg(short, long, default_value = "river.yaml")]
     config: String,
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!(
         config = %cli.config,
-        "River v0.11.0 — starting..."
+        "River v0.11.1 — starting..."
     );
 
     let connections = connection::config::load_config(&cli.config)?;

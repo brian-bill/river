@@ -26,6 +26,15 @@ jobs:
         run: |
           docker compose up -d --wait --wait-timeout 120
 
+      - name: Wait for MySQL
+        working-directory: infra
+        run: |
+          for i in $(seq 1 60); do
+            docker exec infra-mysql-1 mysqladmin ping -h localhost --silent 2>/dev/null && break
+            echo "Waiting for MySQL... ($i)"
+            sleep 2
+          done
+
       - name: Seed databases
         working-directory: infra
         run: |

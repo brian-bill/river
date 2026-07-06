@@ -5,7 +5,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseEv
 use ratatui::DefaultTerminal;
 use ratatui::layout::Rect;
 
-use crate::adapters::DatabaseAdapter;
+use crate::adapters::{DatabaseAdapter, Value};
 use crate::ai::AiClient;
 use crate::connection::{AiConfig, DatabaseKind};
 use crate::engine::planner;
@@ -49,6 +49,7 @@ pub struct App {
     pub theme: Theme,
     pub active_connection: Option<String>,
     pending_query: Option<String>,
+    pub params: HashMap<String, Value>,
     pub sessions: Vec<QuerySession>,
     pub session_idx: usize,
     pub scrollbar_dragging: bool,
@@ -113,6 +114,7 @@ impl App {
             theme: Theme::default(),
             active_connection,
             pending_query: None,
+            params: HashMap::new(),
             sessions,
             session_idx: 0,
             scrollbar_dragging: false,
@@ -441,7 +443,6 @@ fn is_in_area(col: u16, row: u16, area: Rect) -> bool {
 async fn execute_query(app: &mut App, input: String) {
     app.status = Status::Running;
 
-    // Handle special commands
     let trimmed = input.trim();
     if trimmed == ":quit" || trimmed == "exit" {
         app.quit = true;
@@ -458,7 +459,28 @@ async fn execute_query(app: &mut App, input: String) {
         }
     };
 
-    match &stmt {
+    if let Statement::ParamAssign { name, value } = &stmt {
+        match executor::expression_to_value(value) {
+            Some(v) => {
+                app.params.insert(name.clone(), v);
+                app.status = Status::Idle;
+            }
+            None => {
+                let msg = format!("parameter '{name}' must be assigned a literal value");
+                app.output.push(OutputLine::Error(msg.clone()));
+                app.status = Status::Error(msg);
+            }
+        }
+        return;
+    }
+
+    let resolved = if app.params.is_empty() {
+        stmt
+    } else {
+        executor::resolve_params_in_statement(&stmt, &app.params)
+    };
+
+    match &resolved {
         Statement::Describe(desc) => {
             execute_describe(app, desc).await;
         }
@@ -466,10 +488,10 @@ async fn execute_query(app: &mut App, input: String) {
             execute_show_tables(app, conn).await;
         }
         Statement::Query(_) => {
-            execute_plan(app, &stmt).await;
+            execute_plan(app, &resolved).await;
         }
         Statement::Insert(_) | Statement::Update(_) | Statement::Delete(_) => {
-            execute_dml(app, &stmt).await;
+            execute_dml(app, &resolved).await;
         }
         Statement::With(w) => {
             execute_with(app, w).await;
@@ -479,7 +501,7 @@ async fn execute_query(app: &mut App, input: String) {
         }
         Statement::CreateTable(_) | Statement::CreateTableAs(_) | Statement::AlterTable(_) | Statement::DropTable(_)
         | Statement::CreateDatabase(_) | Statement::DropDatabase(_) => {
-            execute_dml(app, &stmt).await;
+            execute_dml(app, &resolved).await;
         }
         Statement::SetOp(_) | Statement::ParamAssign { .. } | Statement::Noop => {
             app.status = Status::Idle;

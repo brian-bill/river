@@ -41,6 +41,335 @@ fn plan_has_limit(node: &PlanNode) -> bool {
     }
 }
 
+pub fn resolve_params(expr: &Expression, params: &HashMap<String, Value>) -> Expression {
+    match expr {
+        Expression::NamedParam(name) => match params.get(name) {
+            Some(v) => value_to_expr(v),
+            None => expr.clone(),
+        },
+        Expression::String(_)
+        | Expression::Number(_)
+        | Expression::Integer(_)
+        | Expression::Boolean(_)
+        | Expression::Null
+        | Expression::Ident(_)
+        | Expression::QualifiedWildcard(_)
+        | Expression::Interval { .. } => expr.clone(),
+        Expression::Array(items) => Expression::Array(
+            items.iter().map(|e| resolve_params(e, params)).collect(),
+        ),
+        Expression::Object(pairs) => Expression::Object(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.clone(), resolve_params(v, params)))
+                .collect(),
+        ),
+        Expression::QualifiedIdent { table, field } => Expression::QualifiedIdent {
+            table: table.clone(),
+            field: field.clone(),
+        },
+        Expression::BinaryOp { op, left, right } => Expression::BinaryOp {
+            op: op.clone(),
+            left: Box::new(resolve_params(left, params)),
+            right: Box::new(resolve_params(right, params)),
+        },
+        Expression::UnaryOp { op, expr: inner } => Expression::UnaryOp {
+            op: op.clone(),
+            expr: Box::new(resolve_params(inner, params)),
+        },
+        Expression::FnCall { name, args } => Expression::FnCall {
+            name: name.clone(),
+            args: args.iter().map(|a| resolve_params(a, params)).collect(),
+        },
+        Expression::Aggregate {
+            name,
+            distinct,
+            args,
+        } => Expression::Aggregate {
+            name: name.clone(),
+            distinct: *distinct,
+            args: args.iter().map(|a| resolve_params(a, params)).collect(),
+        },
+        Expression::WindowFn {
+            func,
+            over,
+            window_name,
+        } => Expression::WindowFn {
+            func: resolve_window_function(func, params),
+            over: WindowSpec {
+                partition_by: over
+                    .partition_by
+                    .iter()
+                    .map(|e| resolve_params(e, params))
+                    .collect(),
+                order_by: over
+                    .order_by
+                    .iter()
+                    .map(|o| OrderBy {
+                        expr: resolve_params(&o.expr, params),
+                        direction: o.direction.clone(),
+                        nulls: o.nulls.clone(),
+                    })
+                    .collect(),
+            },
+            window_name: window_name.clone(),
+        },
+        Expression::Case {
+            expr: case_expr,
+            whens,
+            else_expr,
+        } => Expression::Case {
+            expr: case_expr
+                .as_ref()
+                .map(|e| Box::new(resolve_params(e, params))),
+            whens: whens
+                .iter()
+                .map(|(w, t)| (resolve_params(w, params), resolve_params(t, params)))
+                .collect(),
+            else_expr: else_expr
+                .as_ref()
+                .map(|e| Box::new(resolve_params(e, params))),
+        },
+        Expression::Between { expr: inner, low, high } => Expression::Between {
+            expr: Box::new(resolve_params(inner, params)),
+            low: Box::new(resolve_params(low, params)),
+            high: Box::new(resolve_params(high, params)),
+        },
+        Expression::Subquery(q) => {
+            Expression::Subquery(Box::new(resolve_params_in_query(q, params)))
+        }
+        Expression::Exists(q, is_exists) => {
+            Expression::Exists(Box::new(resolve_params_in_query(q, params)), *is_exists)
+        }
+        Expression::QuantifiedCmp {
+            op,
+            left,
+            quant,
+            subquery,
+        } => Expression::QuantifiedCmp {
+            op: op.clone(),
+            left: Box::new(resolve_params(left, params)),
+            quant: quant.clone(),
+            subquery: Box::new(resolve_params_in_query(subquery, params)),
+        },
+        Expression::Cast { expr: inner, target } => Expression::Cast {
+            expr: Box::new(resolve_params(inner, params)),
+            target: target.clone(),
+        },
+        Expression::AiQuery {
+            config,
+            model,
+            prompt,
+        } => Expression::AiQuery {
+            config: config.clone(),
+            model: model.clone(),
+            prompt: Box::new(resolve_params(prompt, params)),
+        },
+    }
+}
+
+fn value_to_expr(v: &Value) -> Expression {
+    match v {
+        Value::Null => Expression::Null,
+        Value::String(s) => Expression::String(s.clone()),
+        Value::Int(i) => Expression::Integer(*i),
+        Value::Float(f) => Expression::Number(*f),
+        Value::Bool(b) => Expression::Boolean(*b),
+    }
+}
+
+fn resolve_window_function(func: &WindowFunction, params: &HashMap<String, Value>) -> WindowFunction {
+    match func {
+        WindowFunction::RowNumber => WindowFunction::RowNumber,
+        WindowFunction::Rank => WindowFunction::Rank,
+        WindowFunction::DenseRank => WindowFunction::DenseRank,
+        WindowFunction::Lag(e, def) => WindowFunction::Lag(
+            Box::new(resolve_params(e, params)),
+            *def,
+        ),
+        WindowFunction::Lead(e, def) => WindowFunction::Lead(
+            Box::new(resolve_params(e, params)),
+            *def,
+        ),
+        WindowFunction::FirstValue(e) => WindowFunction::FirstValue(Box::new(resolve_params(e, params))),
+        WindowFunction::LastValue(e) => WindowFunction::LastValue(Box::new(resolve_params(e, params))),
+        WindowFunction::NthValue(e, n) => WindowFunction::NthValue(Box::new(resolve_params(e, params)), *n),
+        WindowFunction::Expr(e) => WindowFunction::Expr(Box::new(resolve_params(e, params))),
+    }
+}
+
+fn resolve_params_in_query(query: &Query, params: &HashMap<String, Value>) -> Query {
+    let mut q = query.clone();
+    q.filter = q.filter.as_ref().map(|f| resolve_params(f, params));
+    q.projection = q
+        .projection
+        .iter()
+        .map(|p| match p {
+            Projection::Wildcard => Projection::Wildcard,
+            Projection::QualifiedWildcard(t) => Projection::QualifiedWildcard(t.clone()),
+            Projection::Expr(e, alias) => {
+                Projection::Expr(resolve_params(e, params), alias.clone())
+            }
+        })
+        .collect();
+    q.group_by = q
+        .group_by
+        .iter()
+        .map(|e| resolve_params(e, params))
+        .collect();
+    q.having = q.having.as_ref().map(|h| resolve_params(h, params));
+    q.order_by = q
+        .order_by
+        .iter()
+        .map(|o| OrderBy {
+            expr: resolve_params(&o.expr, params),
+            direction: o.direction.clone(),
+            nulls: o.nulls.clone(),
+        })
+        .collect();
+
+    q.window_defs = q
+        .window_defs
+        .iter()
+        .map(|d| WindowDef {
+            name: d.name.clone(),
+            spec: WindowSpec {
+                partition_by: d
+                    .spec
+                    .partition_by
+                    .iter()
+                    .map(|e| resolve_params(e, params))
+                    .collect(),
+                order_by: d
+                    .spec
+                    .order_by
+                    .iter()
+                    .map(|o| OrderBy {
+                        expr: resolve_params(&o.expr, params),
+                        direction: o.direction.clone(),
+                        nulls: o.nulls.clone(),
+                    })
+                    .collect(),
+            },
+        })
+        .collect();
+
+    q.sources = q
+        .sources
+        .iter()
+        .map(|s| {
+            let mut s2 = s.clone();
+            s2.kind = match &s.kind {
+                SourceKind::Subquery(subq) => {
+                    SourceKind::Subquery(Box::new(resolve_params_in_query(subq, params)))
+                }
+                other => other.clone(),
+            };
+            s2
+        })
+        .collect();
+
+    q.joins = q
+        .joins
+        .iter()
+        .map(|j| {
+            let mut j2 = j.clone();
+            j2.condition = j2.condition.as_ref().map(|c| resolve_params(c, params));
+            j2.source.kind = match &j.source.kind {
+                SourceKind::Subquery(subq) => {
+                    SourceKind::Subquery(Box::new(resolve_params_in_query(subq, params)))
+                }
+                other => other.clone(),
+            };
+            j2
+        })
+        .collect();
+
+    q
+}
+
+pub fn resolve_params_in_statement(
+    stmt: &Statement,
+    params: &HashMap<String, Value>,
+) -> Statement {
+    match stmt {
+        Statement::Query(q) => Statement::Query(resolve_params_in_query(q, params)),
+        Statement::Insert(insert) => {
+            let mut i = insert.clone();
+            i.rows = i
+                .rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|(col, val)| (col.clone(), resolve_params(val, params)))
+                        .collect()
+                })
+                .collect();
+            i.query = i.query.as_ref().map(|q| Box::new(resolve_params_in_query(q, params)));
+            Statement::Insert(i)
+        }
+        Statement::Update(update) => {
+            let mut u = update.clone();
+            u.assignments = u
+                .assignments
+                .iter()
+                .map(|(col, val)| (col.clone(), resolve_params(val, params)))
+                .collect();
+            u.filter = u.filter.as_ref().map(|f| resolve_params(f, params));
+            Statement::Update(u)
+        }
+        Statement::Delete(delete) => {
+            let mut d = delete.clone();
+            d.filter = d.filter.as_ref().map(|f| resolve_params(f, params));
+            Statement::Delete(d)
+        }
+        Statement::With(w) => {
+            let mut new_ctes = Vec::new();
+            for cte in &w.ctes {
+                let mut new_cte = cte.clone();
+                new_cte.query = Box::new(resolve_params_in_query(&cte.query, params));
+                new_cte.chain = cte
+                    .chain
+                    .iter()
+                    .map(|(kind, q)| (kind.clone(), resolve_params_in_query(q, params)))
+                    .collect();
+                new_ctes.push(new_cte);
+            }
+            Statement::With(With {
+                recursive: w.recursive,
+                ctes: new_ctes,
+                body: Box::new(resolve_params_in_statement(w.body.as_ref(), params)),
+            })
+        }
+        Statement::SetOp(s) => Statement::SetOp(SetOp {
+            kind: s.kind.clone(),
+            left: Box::new(resolve_params_in_query(s.left.as_ref(), params)),
+            right: Box::new(resolve_params_in_query(s.right.as_ref(), params)),
+        }),
+        Statement::Explain(inner) => Statement::Explain(Box::new(resolve_params_in_statement(
+            inner.as_ref(),
+            params,
+        ))),
+        Statement::CreateTableAs(ctas) => {
+            let mut c = ctas.clone();
+            c.query = Box::new(resolve_params_in_query(ctas.query.as_ref(), params));
+            Statement::CreateTableAs(c)
+        }
+        other => other.clone(),
+    }
+}
+
+pub fn expression_to_value(expr: &Expression) -> Option<Value> {
+    match expr {
+        Expression::String(s) => Some(Value::String(s.clone())),
+        Expression::Integer(i) => Some(Value::Int(*i)),
+        Expression::Number(n) => Some(Value::Float(*n)),
+        Expression::Boolean(b) => Some(Value::Bool(*b)),
+        Expression::Null => Some(Value::Null),
+        _ => None,
+    }
+}
+
 pub async fn execute_statement(
     stmt: &Statement,
     source_db: &[(String, DatabaseKind)],
@@ -2881,5 +3210,162 @@ order by ut.revenue desc"#;
         );
         let qr = result.unwrap();
         assert!(!qr.rows.is_empty(), "Should have join results");
+    }
+
+    #[test]
+    fn resolve_params_substitutes_string_param() {
+        let mut params = HashMap::new();
+        params.insert("status".to_string(), Value::String("active".to_string()));
+        let expr = Expression::NamedParam("status".to_string());
+        let resolved = super::resolve_params(&expr, &params);
+        assert_eq!(resolved, Expression::String("active".to_string()));
+    }
+
+    #[test]
+    fn resolve_params_substitutes_int_param() {
+        let mut params = HashMap::new();
+        params.insert("limit".to_string(), Value::Int(100));
+        let expr = Expression::NamedParam("limit".to_string());
+        let resolved = super::resolve_params(&expr, &params);
+        assert_eq!(resolved, Expression::Integer(100));
+    }
+
+    #[test]
+    fn resolve_params_substitutes_bool_param() {
+        let mut params = HashMap::new();
+        params.insert("flag".to_string(), Value::Bool(true));
+        let expr = Expression::NamedParam("flag".to_string());
+        let resolved = super::resolve_params(&expr, &params);
+        assert_eq!(resolved, Expression::Boolean(true));
+    }
+
+    #[test]
+    fn resolve_params_substitutes_float_param() {
+        let mut params = HashMap::new();
+        params.insert("threshold".to_string(), Value::Float(3.14));
+        let expr = Expression::NamedParam("threshold".to_string());
+        let resolved = super::resolve_params(&expr, &params);
+        assert_eq!(resolved, Expression::Number(3.14));
+    }
+
+    #[test]
+    fn resolve_params_substitutes_null_param() {
+        let mut params = HashMap::new();
+        params.insert("value".to_string(), Value::Null);
+        let expr = Expression::NamedParam("value".to_string());
+        let resolved = super::resolve_params(&expr, &params);
+        assert_eq!(resolved, Expression::Null);
+    }
+
+    #[test]
+    fn resolve_params_unknown_param_unchanged() {
+        let params: HashMap<String, Value> = HashMap::new();
+        let expr = Expression::NamedParam("unknown".to_string());
+        let resolved = super::resolve_params(&expr, &params);
+        assert_eq!(resolved, Expression::NamedParam("unknown".to_string()));
+    }
+
+    #[test]
+    fn resolve_params_in_binary_op() {
+        let mut params = HashMap::new();
+        params.insert("status".to_string(), Value::String("active".to_string()));
+        let expr = Expression::BinaryOp {
+            op: BinaryOp::Eq,
+            left: Box::new(Expression::Ident("status".to_string())),
+            right: Box::new(Expression::NamedParam("status".to_string())),
+        };
+        let resolved = super::resolve_params(&expr, &params);
+        let expected = Expression::BinaryOp {
+            op: BinaryOp::Eq,
+            left: Box::new(Expression::Ident("status".to_string())),
+            right: Box::new(Expression::String("active".to_string())),
+        };
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_params_in_between() {
+        let mut params = HashMap::new();
+        params.insert("start".to_string(), Value::String("2024-01-01".to_string()));
+        params.insert("end".to_string(), Value::String("2024-12-31".to_string()));
+        let expr = Expression::Between {
+            expr: Box::new(Expression::Ident("created_at".to_string())),
+            low: Box::new(Expression::NamedParam("start".to_string())),
+            high: Box::new(Expression::NamedParam("end".to_string())),
+        };
+        let resolved = super::resolve_params(&expr, &params);
+        let expected = Expression::Between {
+            expr: Box::new(Expression::Ident("created_at".to_string())),
+            low: Box::new(Expression::String("2024-01-01".to_string())),
+            high: Box::new(Expression::String("2024-12-31".to_string())),
+        };
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_params_expression_to_value() {
+        assert_eq!(
+            super::expression_to_value(&Expression::String("active".to_string())),
+            Some(Value::String("active".to_string()))
+        );
+        assert_eq!(
+            super::expression_to_value(&Expression::Integer(42)),
+            Some(Value::Int(42))
+        );
+        assert_eq!(
+            super::expression_to_value(&Expression::Boolean(true)),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(
+            super::expression_to_value(&Expression::Null),
+            Some(Value::Null)
+        );
+        assert_eq!(
+            super::expression_to_value(&Expression::Ident("x".to_string())),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_params_in_statement_query_filter() {
+        let mut params = HashMap::new();
+        params.insert("status".to_string(), Value::String("active".to_string()));
+        let query = Query {
+            filter: Some(Expression::BinaryOp {
+                op: BinaryOp::Eq,
+                left: Box::new(Expression::Ident("status".to_string())),
+                right: Box::new(Expression::NamedParam("status".to_string())),
+            }),
+            ..Query::default()
+        };
+        let stmt = Statement::Query(query);
+        let resolved = super::resolve_params_in_statement(&stmt, &params);
+        match resolved {
+            Statement::Query(q) => {
+                let expected = Expression::BinaryOp {
+                    op: BinaryOp::Eq,
+                    left: Box::new(Expression::Ident("status".to_string())),
+                    right: Box::new(Expression::String("active".to_string())),
+                };
+                assert_eq!(q.filter, Some(expected));
+            }
+            _ => panic!("expected Query"),
+        }
+    }
+
+    #[test]
+    fn resolve_params_in_statement_no_params_unchanged() {
+        let params: HashMap<String, Value> = HashMap::new();
+        let query = Query {
+            filter: Some(Expression::BinaryOp {
+                op: BinaryOp::Eq,
+                left: Box::new(Expression::Ident("status".to_string())),
+                right: Box::new(Expression::NamedParam("status".to_string())),
+            }),
+            ..Query::default()
+        };
+        let stmt = Statement::Query(query.clone());
+        let resolved = super::resolve_params_in_statement(&stmt, &params);
+        assert_eq!(resolved, stmt);
     }
 }
