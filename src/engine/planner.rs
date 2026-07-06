@@ -420,7 +420,7 @@ pub fn plan_query(
                 if let Some((left_key, right_key)) = equi_keys {
                     let (probe_source, probe_database) = match &right_node {
                         PlanNode::Scan { source, database, .. } => {
-                            (source.clone(), database.clone().unwrap())
+                            (source.clone(), database.clone().expect("cross-db join requires source to have a database"))
                         }
                         _ => {
                             root = PlanNode::Join {

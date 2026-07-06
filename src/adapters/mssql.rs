@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use tiberius::{Client, Config};
+use tiberius::{Client, Config, ToSql};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -95,8 +95,9 @@ fn row_to_values(row: &tiberius::Row, col_count: usize) -> Vec<Value> {
 async fn execute_stream(
     client: &mut Client<Compat<TcpStream>>,
     query: &str,
+    params: &[&dyn ToSql],
 ) -> Result<(Vec<String>, Vec<Vec<Value>>, u64), RiverError> {
-    let mut stream = client.query(query, &[]).await?;
+    let mut stream = client.query(query, params).await?;
 
     let cols = stream.columns().await?;
     let columns: Vec<String> = cols
@@ -137,7 +138,7 @@ impl DatabaseAdapter for MssqlAdapter {
 
         // Attempt query with reconnection on transport failure
         let (columns, rows, rows_affected) =
-            match execute_stream(&mut guard, query).await {
+            match execute_stream(&mut guard, query, &[]).await {
                 Ok(result) => result,
                 Err(first_err) => {
                     // Transport error — drop lock, reconnect, retry
@@ -149,7 +150,7 @@ impl DatabaseAdapter for MssqlAdapter {
                     let new_client = connect_client(&self.config_uri).await?;
                     let mut guard = self.client.lock().await;
                     *guard = new_client;
-                    execute_stream(&mut guard, query).await?
+                    execute_stream(&mut guard, query, &[]).await?
                 }
             };
 
@@ -166,17 +167,22 @@ impl DatabaseAdapter for MssqlAdapter {
     }
 
     async fn list_tables(&self, schema: Option<&str>) -> Result<Vec<TableInfo>, RiverError> {
-        let schema_filter = schema
-            .map(|s| format!(" AND TABLE_SCHEMA = '{}'", s.replace('\'', "''")))
-            .unwrap_or_default();
-        let query = format!(
-            "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES \
-             WHERE TABLE_TYPE = 'BASE TABLE'{} \
-             ORDER BY TABLE_SCHEMA, TABLE_NAME",
-            schema_filter
-        );
         let mut guard = self.client.lock().await;
-        let (_, rows, _) = execute_stream(&mut guard, &query).await?;
+        let (_, rows, _) = if let Some(s) = schema {
+            execute_stream(&mut guard,
+                "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES \
+                 WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_SCHEMA = @P1 \
+                 ORDER BY TABLE_SCHEMA, TABLE_NAME",
+                &[&s as &dyn ToSql],
+            ).await?
+        } else {
+            execute_stream(&mut guard,
+                "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES \
+                 WHERE TABLE_TYPE = 'BASE TABLE' \
+                 ORDER BY TABLE_SCHEMA, TABLE_NAME",
+                &[],
+            ).await?
+        };
 
         let mut tables = Vec::new();
         for row in &rows {
@@ -199,18 +205,22 @@ impl DatabaseAdapter for MssqlAdapter {
         table: &str,
         schema: Option<&str>,
     ) -> Result<TableSchema, RiverError> {
-        let schema_filter = schema
-            .map(|s| format!(" AND TABLE_SCHEMA = '{}'", s.replace('\'', "''")))
-            .unwrap_or_default();
-        let query = format!(
-            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
-             FROM INFORMATION_SCHEMA.COLUMNS \
-             WHERE TABLE_NAME = '{}'{} ORDER BY ORDINAL_POSITION",
-            table.replace('\'', "''"),
-            schema_filter
-        );
         let mut guard = self.client.lock().await;
-        let (_, rows, _) = execute_stream(&mut guard, &query).await?;
+        let (_, rows, _) = if let Some(s) = schema {
+            execute_stream(&mut guard,
+                "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
+                 FROM INFORMATION_SCHEMA.COLUMNS \
+                 WHERE TABLE_NAME = @P1 AND TABLE_SCHEMA = @P2 ORDER BY ORDINAL_POSITION",
+                &[&table as &dyn ToSql, &s as &dyn ToSql],
+            ).await?
+        } else {
+            execute_stream(&mut guard,
+                "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE \
+                 FROM INFORMATION_SCHEMA.COLUMNS \
+                 WHERE TABLE_NAME = @P1 ORDER BY ORDINAL_POSITION",
+                &[&table as &dyn ToSql],
+            ).await?
+        };
 
         let mut columns = Vec::new();
         for row in &rows {
@@ -244,7 +254,7 @@ impl DatabaseAdapter for MssqlAdapter {
         use super::swap_database_in_uri;
         let maint_uri = swap_database_in_uri(&self.config.uri, "master")?;
         let mut client = connect_client(&maint_uri).await?;
-        let (columns, rows, rows_affected) = execute_stream(&mut client, sql).await?;
+        let (columns, rows, rows_affected) = execute_stream(&mut client, sql, &[]).await?;
         let num_cols = columns.len();
         Ok(QueryResult {
             columns,
