@@ -1931,13 +1931,17 @@ fn except_results(
             row
         })
         .collect();
+    let mut seen = std::collections::HashSet::new();
     let rows: Vec<Vec<Value>> = left
         .rows
         .into_iter()
-        .filter(|row| {
-            let mut aligned = row.clone();
-            aligned.resize(columns.len(), Value::Null);
-            !right_set.contains(aligned.as_slice())
+        .filter_map(|mut row| {
+            row.resize(columns.len(), Value::Null);
+            if !right_set.contains(row.as_slice()) && seen.insert(row.clone()) {
+                Some(row)
+            } else {
+                None
+            }
         })
         .collect();
     Ok(QueryResult {
