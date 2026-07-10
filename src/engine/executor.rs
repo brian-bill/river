@@ -1835,7 +1835,14 @@ fn union_results(
     } else {
         right.column_sources.clone()
     };
-    let mut rows = left.rows.clone();
+    let mut rows: Vec<Vec<Value>> = left
+        .rows
+        .into_iter()
+        .map(|mut row| {
+            row.resize(columns.len(), Value::Null);
+            row
+        })
+        .collect();
     for r_row in &right.rows {
         let mut aligned = r_row.clone();
         aligned.resize(columns.len(), Value::Null);
