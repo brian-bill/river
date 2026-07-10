@@ -213,8 +213,8 @@ fn render_compact_table<'a>(
 
         let mut last_visible = first_visible;
         let mut w_accum = 1usize;
-        for i in first_visible..col_count {
-            let col_total = col_widths[i] + cell_padding;
+        for (i, &col_width) in col_widths.iter().enumerate().skip(first_visible) {
+            let col_total = col_width + cell_padding;
             if w_accum + col_total > viewport_width && i > first_visible {
                 break;
             }
@@ -503,8 +503,7 @@ fn render_input(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         )));
     }
 
-    for di in view_offset..view_end {
-        let (_logical_idx, chunk_idx) = display_lines[di];
+    for (di, &(_logical_idx, chunk_idx)) in display_lines.iter().enumerate().skip(view_offset).take(view_end - view_offset) {
         let chunk = &chunks[chunk_idx];
 
         let is_cursor_line = Some(di) == cursor_display_line;

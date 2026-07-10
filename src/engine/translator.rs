@@ -1188,7 +1188,7 @@ pub fn translate_query_mongo(query: &Query, database: &str) -> JsonValue {
                     .map(translate_expr_mongo)
                     .collect();
                 if group_keys.len() == 1 {
-                    group_spec.insert("_id".to_string(), group_keys.into_iter().next().unwrap());
+                    group_spec.insert("_id".to_string(), group_keys.into_iter().next().expect("group_by has exactly one key"));
                 } else {
                     group_spec.insert(
                         "_id".to_string(),

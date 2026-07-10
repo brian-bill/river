@@ -296,7 +296,7 @@ impl AiClient {
 
         if let Ok(err) = serde_json::from_str::<GeminiErrorWrapper>(&body_text)
             && err.error.is_some() {
-                let msg = err.error.unwrap().message;
+                let msg = err.error.map(|e| e.message).unwrap_or_default();
                 warn!("Gemini API error: {}", msg);
                 return Err(format!("[AI Error: {}]", msg));
             }
@@ -366,6 +366,8 @@ struct GeminiErrorWrapper {
 
 // ── Batch execution ──────────────────────────────────────────────────────────
 
+pub type EvalExprFn = fn(&Expression, &[String], &[Option<String>], &[Value]) -> Value;
+
 pub async fn execute_ai_columns(
     client: &AiClient,
     ai_configs: Arc<HashMap<String, AiConfig>>,
@@ -373,9 +375,9 @@ pub async fn execute_ai_columns(
     base_columns: &[String],
     column_sources: &[Option<String>],
     rows: &[Vec<Value>],
-    eval_expr_fn: fn(&Expression, &[String], &[Option<String>], &[Value]) -> Value,
+    eval_expr_fn: EvalExprFn,
 ) -> Vec<Vec<Value>> {
-    let mut new_rows: Vec<Vec<Value>> = rows.iter().map(|r| r.clone()).collect();
+    let mut new_rows: Vec<Vec<Value>> = rows.to_vec();
 
     for col in ai_columns {
         let Expression::AiQuery { config: config_name, model, prompt } = &col.expr else {
@@ -422,7 +424,7 @@ pub async fn execute_ai_columns(
             let http = client.http.clone();
 
             tasks.push(Some(tokio::spawn(async move {
-                let _permit = sem.acquire().await.unwrap();
+                let _permit = sem.acquire().await.expect("semaphore closed");
                 let temp = AiClient { http };
                 match temp.chat(&cfg, mdl.as_deref(), &prompt_str).await {
                     Ok(content) => Value::String(content),

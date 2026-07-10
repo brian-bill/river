@@ -728,45 +728,51 @@ fn translate_case_postgres() {
 
 #[test]
 fn translate_schema_table_postgres() {
-    let mut q = Query::default();
-    q.projection = vec![Projection::Wildcard];
-    q.sources.push(Source {
-        name: "users".into(),
-        alias: None,
-        connection: None,
-        schema: Some("public".into()),
-        kind: SourceKind::Table("users".into()),
-    });
+    let q = Query {
+        projection: vec![Projection::Wildcard],
+        sources: vec![Source {
+            name: "users".into(),
+            alias: None,
+            connection: None,
+            schema: Some("public".into()),
+            kind: SourceKind::Table("users".into()),
+        }],
+        ..Default::default()
+    };
     let sql = translate_query(&q, &PostgresDialect);
     assert_eq!(sql, r#"SELECT * FROM "public"."users""#);
 }
 
 #[test]
 fn translate_schema_table_mysql() {
-    let mut q = Query::default();
-    q.projection = vec![Projection::Wildcard];
-    q.sources.push(Source {
-        name: "users".into(),
-        alias: None,
-        connection: None,
-        schema: Some("inventory".into()),
-        kind: SourceKind::Table("users".into()),
-    });
+    let q = Query {
+        projection: vec![Projection::Wildcard],
+        sources: vec![Source {
+            name: "users".into(),
+            alias: None,
+            connection: None,
+            schema: Some("inventory".into()),
+            kind: SourceKind::Table("users".into()),
+        }],
+        ..Default::default()
+    };
     let sql = translate_query(&q, &MySQLDialect);
     assert_eq!(sql, "SELECT * FROM `inventory`.`users`");
 }
 
 #[test]
 fn translate_schema_table_aliased() {
-    let mut q = Query::default();
-    q.projection = vec![Projection::Wildcard];
-    q.sources.push(Source {
+    let q = Query {
+        projection: vec![Projection::Wildcard],
+        sources: vec![Source {
         name: "u".into(),
         alias: Some("u".into()),
         connection: None,
         schema: Some("public".into()),
         kind: SourceKind::Table("users".into()),
-    });
+        }],
+        ..Default::default()
+    };
     let sql = translate_query(&q, &PostgresDialect);
     assert_eq!(sql, r#"SELECT * FROM "public"."users" AS "u""#);
 }

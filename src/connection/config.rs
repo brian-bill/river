@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum DatabaseKind {
     Postgres,
     MySQL,
+    #[allow(clippy::upper_case_acronyms)]
     MSSQL,
     SQLite,
     MongoDB,
@@ -24,21 +25,16 @@ pub struct ConnectionConfig {
     pub schema: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AiProvider {
     #[serde(alias = "openai")]
+    #[default]
     OpenAI,
     #[serde(alias = "anthropic")]
     Anthropic,
     #[serde(alias = "gemini")]
     Gemini,
-}
-
-impl Default for AiProvider {
-    fn default() -> Self {
-        AiProvider::OpenAI
-    }
 }
 
 impl fmt::Display for AiProvider {

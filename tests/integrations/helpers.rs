@@ -77,7 +77,7 @@ pub fn user_status(i: usize) -> &'static str {
 }
 
 pub fn user_is_verified(i: usize) -> bool {
-    i % 3 == 0
+    i.is_multiple_of(3)
 }
 
 pub fn product_name(i: usize) -> String {
@@ -103,7 +103,7 @@ pub fn product_rating(i: usize) -> f64 {
 }
 
 pub fn product_is_active(i: usize) -> bool {
-    i % 10 != 0
+    !i.is_multiple_of(10)
 }
 
 pub fn order_user_id(i: usize) -> i64 {

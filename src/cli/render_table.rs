@@ -171,7 +171,7 @@ mod tests {
         assert_eq!(value_to_string(&Value::Int(42)), "42");
         assert_eq!(value_to_string(&Value::Bool(true)), "true");
         assert_eq!(value_to_string(&Value::Float(3.0)), "3.0");
-        assert_eq!(value_to_string(&Value::Float(3.14)), "3.14");
+        assert_eq!(value_to_string(&Value::Float(std::f64::consts::PI)), "3.141592653589793");
     }
 
     #[test]

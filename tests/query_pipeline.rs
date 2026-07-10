@@ -240,7 +240,7 @@ async fn pipeline_between() {
     assert_row_count_gte(&result, 1);
     assert_all_match(&result, "salary", |v| {
         let salary = value_as_f64(v).expect("salary should be numeric");
-        salary >= 50000.0 && salary <= 60000.0
+        (50_000.00..=60_000.00).contains(&salary)
     });
 }
 
