@@ -41,6 +41,12 @@ impl PartialEq for PlanNode {
             (PlanNode::Union { left: l1, right: r1, all: a1 }, PlanNode::Union { left: l2, right: r2, all: a2 }) => {
                 l1 == l2 && r1 == r2 && a1 == a2
             }
+            (PlanNode::Intersect { left: l1, right: r1 }, PlanNode::Intersect { left: l2, right: r2 }) => {
+                l1 == l2 && r1 == r2
+            }
+            (PlanNode::Except { left: l1, right: r1 }, PlanNode::Except { left: l2, right: r2 }) => {
+                l1 == l2 && r1 == r2
+            }
             (PlanNode::SemiJoinFetch { build: b1, probe_source: p1, probe_database: d1, build_key: bk1, probe_key: pk1, join_kind: j1, condition: c1 },
              PlanNode::SemiJoinFetch { build: b2, probe_source: p2, probe_database: d2, build_key: bk2, probe_key: pk2, join_kind: j2, condition: c2 }) => {
                 b1 == b2 && p1 == p2 && d1 == d2 && bk1 == bk2 && pk1 == pk2 && j1 == j2 && c1 == c2
@@ -139,6 +145,16 @@ pub enum PlanNode {
         left: Box<PlanNode>,
         right: Box<PlanNode>,
         all: bool,
+    },
+    #[allow(dead_code)]
+    Intersect {
+        left: Box<PlanNode>,
+        right: Box<PlanNode>,
+    },
+    #[allow(dead_code)]
+    Except {
+        left: Box<PlanNode>,
+        right: Box<PlanNode>,
     },
     SemiJoinFetch {
         build: Box<PlanNode>,
@@ -283,7 +299,9 @@ fn find_single_db(node: &PlanNode) -> Option<(String, DatabaseKind)> {
             let r = find_single_db(right)?;
             if l.0 == r.0 { Some(l) } else { None }
         }
-        PlanNode::Union { left, right, .. } => {
+        PlanNode::Union { left, right, .. }
+        | PlanNode::Intersect { left, right, .. }
+        | PlanNode::Except { left, right, .. } => {
             let l = find_single_db(left)?;
             let r = find_single_db(right)?;
             if l.0 == r.0 { Some(l) } else { None }
@@ -850,8 +868,32 @@ pub fn plan_statement(
                 },
             }
         }
+        Statement::SetOp(setop) => {
+            let left_plan = plan_query(&setop.left, source_db, ai_configs);
+            let right_plan = plan_query(&setop.right, source_db, ai_configs);
+            match setop.kind {
+                SetOpKind::Union | SetOpKind::UnionAll => QueryPlan {
+                    root: PlanNode::Union {
+                        left: Box::new(left_plan.root),
+                        right: Box::new(right_plan.root),
+                        all: matches!(setop.kind, SetOpKind::UnionAll),
+                    },
+                },
+                SetOpKind::Intersect => QueryPlan {
+                    root: PlanNode::Intersect {
+                        left: Box::new(left_plan.root),
+                        right: Box::new(right_plan.root),
+                    },
+                },
+                SetOpKind::Except => QueryPlan {
+                    root: PlanNode::Except {
+                        left: Box::new(left_plan.root),
+                        right: Box::new(right_plan.root),
+                    },
+                },
+            }
+        }
         Statement::With(_)
-        | Statement::SetOp(_)
         | Statement::Explain(_)
         | Statement::ParamAssign { .. }
         | Statement::Noop => QueryPlan {
@@ -1134,6 +1176,16 @@ fn format_node(node: &PlanNode, lines: &mut Vec<String>, prefix: String, is_last
             format_node(left, lines, child_prefix.clone(), false);
             format_node(right, lines, child_prefix, true);
         }
+        PlanNode::Intersect { left, right } => {
+            lines.push(format!("{connector}INTERSECT"));
+            format_node(left, lines, child_prefix.clone(), false);
+            format_node(right, lines, child_prefix, true);
+        }
+        PlanNode::Except { left, right } => {
+            lines.push(format!("{connector}EXCEPT"));
+            format_node(left, lines, child_prefix.clone(), false);
+            format_node(right, lines, child_prefix, true);
+        }
         PlanNode::SemiJoinFetch {
             build,
             probe_source,
@@ -1375,7 +1427,9 @@ fn collect_databases(node: &PlanNode, out: &mut Vec<(String, DatabaseKind)>) {
             collect_databases(input, out);
         }
         PlanNode::Join { left, right, .. }
-        | PlanNode::Union { left, right, .. } => {
+        | PlanNode::Union { left, right, .. }
+        | PlanNode::Intersect { left, right, .. }
+        | PlanNode::Except { left, right, .. } => {
             collect_databases(left, out);
             collect_databases(right, out);
         }

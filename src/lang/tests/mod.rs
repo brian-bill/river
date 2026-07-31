@@ -400,6 +400,110 @@ fn except() {
     ).is_ok());
 }
 
+#[test]
+fn union_with_distinct() {
+    let result = parse_one(
+        "find distinct [name, email] from customers union all find distinct [name, email] from suppliers"
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn union_with_order_by() {
+    let result = parse_one(
+        "find [name, email] from customers union find [name, email] from suppliers order by name asc"
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn union_with_limit() {
+    let result = parse_one(
+        "find [name, email] from customers union all find [name, email] from suppliers limit 10"
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn union_with_where_clauses() {
+    let result = parse_one(
+        "find [name, email] from users where status = \"active\" union all find [name, email] from users where status = \"pending\""
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn union_with_star_projection() {
+    let result = parse_one(
+        "find * from customers union all find * from suppliers"
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn union_all_as_setop_statement() {
+    let result = parse_one(
+        "find [name] from t1 union all find [name] from t2"
+    );
+    assert!(result.is_ok());
+    let stmts = result.unwrap();
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0] {
+        Statement::SetOp(op) => {
+            assert_eq!(op.kind, SetOpKind::UnionAll);
+        }
+        _ => panic!("expected SetOp"),
+    }
+}
+
+#[test]
+fn union_as_setop_statement() {
+    let result = parse_one(
+        "find [name] from t1 union find [name] from t2"
+    );
+    assert!(result.is_ok());
+    let stmts = result.unwrap();
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0] {
+        Statement::SetOp(op) => {
+            assert_eq!(op.kind, SetOpKind::Union);
+        }
+        _ => panic!("expected SetOp"),
+    }
+}
+
+#[test]
+fn intersect_as_setop_statement() {
+    let result = parse_one(
+        "find [id] from t1 intersect find [id] from t2"
+    );
+    assert!(result.is_ok());
+    let stmts = result.unwrap();
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0] {
+        Statement::SetOp(op) => {
+            assert_eq!(op.kind, SetOpKind::Intersect);
+        }
+        _ => panic!("expected SetOp"),
+    }
+}
+
+#[test]
+fn except_as_setop_statement() {
+    let result = parse_one(
+        "find [id] from t1 except find [id] from t2"
+    );
+    assert!(result.is_ok());
+    let stmts = result.unwrap();
+    assert_eq!(stmts.len(), 1);
+    match &stmts[0] {
+        Statement::SetOp(op) => {
+            assert_eq!(op.kind, SetOpKind::Except);
+        }
+        _ => panic!("expected SetOp"),
+    }
+}
+
 // ── Subqueries ───────────────────────────────────────────────────────────────
 
 #[test]
